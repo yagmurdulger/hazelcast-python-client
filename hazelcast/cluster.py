@@ -194,13 +194,13 @@ class ClusterService(object):
             self._init_backup_listener(connection)
 
     def _init_backup_listener(self, connection):
-        request = client_local_backup_listener_codec.encode_request(False)
+        request = client_local_backup_listener_codec.encode_request()
 
         def handler(m):
             client_local_backup_listener_codec.handle(m, self._handle_backup_count)
 
         response = self._client.invoker.invoke(
-            ListenerInvocation(self._client.listener, request, handler, connection=connection)).result()###
+            ListenerInvocation(self._client.listener, request, handler, connection=connection)).result()
         registration_id = client_local_backup_listener_codec.decode_response(response)["response"]
 
     def _handle_backup_count(self, backup_id):

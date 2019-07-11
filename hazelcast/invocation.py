@@ -7,7 +7,7 @@ from hazelcast.exception import create_exception, HazelcastInstanceNotActiveErro
     AuthenticationError, TargetDisconnectedError, HazelcastClientNotActiveException, TargetNotMemberError
 from hazelcast.future import Future
 from hazelcast.lifecycle import LIFECYCLE_STATE_CONNECTED
-from hazelcast.protocol.client_message import LISTENER_FLAG, BACKUP_AWARE_FLAG
+from hazelcast.protocol.client_message import LISTENER_FLAG, BACKUP_AWARE_FLAG, BACKUP_EVENT_FLAG
 from hazelcast.protocol.custom_codec import EXCEPTION_MESSAGE_TYPE, ErrorCodec
 from hazelcast.util import AtomicInteger
 from hazelcast.six.moves import queue
@@ -30,6 +30,7 @@ class Invocation(object):
         self.backup_acks_expected = -1
         self.backup_acks_received = 0
         self.pending_response_message = None
+        self.invocation_service = invocation_service
 
     def has_connection(self):
         return self.connection is not None
@@ -52,11 +53,11 @@ class Invocation(object):
 
         self.complete(response)
 
-
     def complete(self,response):
         if self.timer:
             self.timer.cancel()
         self.future.set_result(response)
+        self.invocation_service.deregister_invocation(response.get_correlation_id())
 
 
     def set_exception(self, exception, traceback=None):
@@ -319,7 +320,7 @@ class InvocationService(object):
         if correlation_id not in self._pending:
             self.logger.warning("Got message with unknown correlation id: %s", message, extra=self._logger_extras)
             return
-        invocation = self._pending.pop(correlation_id)
+        invocation = self._pending.get(correlation_id)
 
         if message.get_message_type() == EXCEPTION_MESSAGE_TYPE:
             error = create_exception(ErrorCodec(message))
@@ -365,3 +366,6 @@ class InvocationService(object):
 
     def _is_member(self, address):
         return self._client.cluster.get_member_by_address(address) is not None
+
+    def deregister_invocation(self, correlation_id):
+        self._pending.pop(correlation_id)

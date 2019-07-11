@@ -35,6 +35,8 @@ BEGIN_FLAG = 0x80
 END_FLAG = 0x40
 BEGIN_END_FLAG = BEGIN_FLAG | END_FLAG
 LISTENER_FLAG = 0x01
+BACKUP_AWARE_FLAG = 0x02
+BACKUP_EVENT_FLAG = 0x04
 
 PAYLOAD_OFFSET = 18
 SIZE_OFFSET = 0
@@ -46,8 +48,9 @@ TYPE_FIELD_OFFSET = FLAGS_FIELD_OFFSET + BYTE_SIZE_IN_BYTES
 CORRELATION_ID_FIELD_OFFSET = TYPE_FIELD_OFFSET + SHORT_SIZE_IN_BYTES
 PARTITION_ID_FIELD_OFFSET = CORRELATION_ID_FIELD_OFFSET + LONG_SIZE_IN_BYTES
 DATA_OFFSET_FIELD_OFFSET = PARTITION_ID_FIELD_OFFSET + INT_SIZE_IN_BYTES
-HEADER_SIZE = DATA_OFFSET_FIELD_OFFSET + SHORT_SIZE_IN_BYTES
 
+BACKUP_ACKS_FIELD_OFFSET = DATA_OFFSET_FIELD_OFFSET + SHORT_SIZE_IN_BYTES
+HEADER_SIZE = BACKUP_ACKS_FIELD_OFFSET + SHORT_SIZE_IN_BYTES
 
 class ClientMessage(object):
     def __init__(self, buff=None, payload_size=0):
@@ -234,6 +237,10 @@ class ClientMessage(object):
                                          self.is_retryable(),
                                          self.is_flag_set(LISTENER_FLAG),
                                          self.get_data_offset())
+
+    ###
+    def get_number_of_backup_acks(self):
+        return struct.unpack_from(FMT_LE_UINT16, self.buffer, BACKUP_ACKS_FIELD_OFFSET)[0]
 
 
 class ClientMessageBuilder(object):

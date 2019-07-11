@@ -340,13 +340,13 @@ class DefaultAddressProvider(object):
     Loads addresses from the Hazelcast configuration.
     """
     def __init__(self, network_config):
-        self._network_config = network_config
+        self._network_config = network_config #network config object
 
     def load_addresses(self):
         """
         :return: (Sequence), The possible member addresses to connect to.
         """
-        return parse_addresses(self._network_config.addresses)
+        return parse_addresses(self._network_config.addresses) #member addresses to connect to. It should be allowed to have resolved addressed
 
 
 class DefaultAddressTranslator(object):
@@ -358,7 +358,7 @@ class DefaultAddressTranslator(object):
         :param address: (:class:`~hazelcast.core.Address`), address to be translated.
         :return: (:class:`~hazelcast.core.Address`), translated address.
         """
-        return address
+        return address #maybe it should return resolved addresses.
 
     def refresh(self):
         """Refreshes the internal lookup table if necessary."""

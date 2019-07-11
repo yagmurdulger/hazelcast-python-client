@@ -7,7 +7,7 @@ import uuid
 from hazelcast.exception import HazelcastError, AuthenticationError, TargetDisconnectedError
 from hazelcast.invocation import ListenerInvocation
 from hazelcast.lifecycle import LIFECYCLE_STATE_CONNECTED, LIFECYCLE_STATE_DISCONNECTED
-from hazelcast.protocol.codec import client_add_membership_listener_codec, client_authentication_codec
+from hazelcast.protocol.codec import client_add_membership_listener_codec, client_authentication_codec, client_local_backup_listener_codec
 from hazelcast.util import get_possible_addresses, get_provider_addresses, calculate_version
 from hazelcast.version import CLIENT_TYPE, CLIENT_VERSION, SERIALIZATION_VERSION
 
@@ -48,6 +48,7 @@ class ClusterService(object):
         Connects to cluster.
         """
         self._connect_to_cluster()
+        self._init_backup_listeners()
 
     def shutdown(self):
         pass
@@ -186,6 +187,26 @@ class ClusterService(object):
         registration_id = client_add_membership_listener_codec.decode_response(response)["response"]
         self.logger.debug("Registered membership listener with ID " + registration_id, extra=self._logger_extras)
         self._initial_list_fetched.wait()
+
+    def _init_backup_listeners(self):
+        for address in self._members.keys():
+            connection = self._client.connection_manager.get_or_connect(address).result()
+            self._init_backup_listener(connection)
+
+    def _init_backup_listener(self, connection):
+        request = client_local_backup_listener_codec.encode_request(False)
+
+        def handler(m):
+            client_local_backup_listener_codec.handle(m, self._handle_backup_count)
+
+        response = self._client.invoker.invoke(
+            ListenerInvocation(self._client.listener, request, handler, connection=connection)).result()###
+        registration_id = client_local_backup_listener_codec.decode_response(response)["response"]
+
+    def _handle_backup_count(self, backup_id):
+        invocation = self._client.invoker._pending.get(backup_id)
+        if invocation is not None:
+            invocation.notify_backup()
 
     def _handle_member(self, member, event_type):
         self.logger.debug("Got member event: %s, %s", member, event_type, extra=self._logger_extras)

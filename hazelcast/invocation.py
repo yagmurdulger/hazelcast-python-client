@@ -7,7 +7,7 @@ from hazelcast.exception import create_exception, HazelcastInstanceNotActiveErro
     AuthenticationError, TargetDisconnectedError, HazelcastClientNotActiveException, TargetNotMemberError
 from hazelcast.future import Future
 from hazelcast.lifecycle import LIFECYCLE_STATE_CONNECTED
-from hazelcast.protocol.client_message import LISTENER_FLAG
+from hazelcast.protocol.client_message import LISTENER_FLAG, BACKUP_AWARE_FLAG
 from hazelcast.protocol.custom_codec import EXCEPTION_MESSAGE_TYPE, ErrorCodec
 from hazelcast.util import AtomicInteger
 from hazelcast.six.moves import queue
@@ -27,6 +27,9 @@ class Invocation(object):
         self.partition_id = partition_id
         self.request = request
         self.future = Future()
+        self.backup_acks_expected = -1
+        self.backup_acks_received = 0
+        self.pending_response_message = None
 
     def has_connection(self):
         return self.connection is not None
@@ -38,9 +41,23 @@ class Invocation(object):
         return self.address is not None
 
     def set_response(self, response):
+        expected_backups = response.get_number_of_backup_acks()
+
+        if expected_backups > self.backup_acks_received:
+            self.backup_acks_expected = expected_backups
+            self.pending_response_message = response
+
+            if self.backup_acks_received != expected_backups:
+                return
+
+        self.complete(response)
+
+
+    def complete(self,response):
         if self.timer:
             self.timer.cancel()
         self.future.set_result(response)
+
 
     def set_exception(self, exception, traceback=None):
         if self.timer:
@@ -53,6 +70,27 @@ class Invocation(object):
 
     def on_timeout(self):
         self.set_exception(TimeoutError("Request timed out after %d seconds." % self._invocation_timeout))
+
+    def notify_backup(self):
+        self.backup_acks_received += 1
+        new_backup_acks_completed = self.backup_acks_received
+
+        pending_response = self.pending_response_message
+        if pending_response is None:
+            return
+
+        backup_acks_expected = self.backup_acks_expected
+        if backup_acks_expected < new_backup_acks_completed:
+            #the backups have not yet completed so we are done
+            return
+
+        if backup_acks_expected != new_backup_acks_completed:
+            #we managed to complete one backup but we are not the one completing the last backup, so we are done
+            return
+
+        #we are the lucky one who completed the last backup for this invocation and since the pending response is set,
+        #we can set it on the future.
+        self.complete(pending_response)
 
 
 class ListenerInvocation(Invocation):
@@ -164,6 +202,7 @@ class InvocationService(object):
         return self.invoke(Invocation(self, message, address=address))
 
     def invoke_smart(self, invocation, ignore_heartbeat=False):
+        invocation.request.add_flag(BACKUP_AWARE_FLAG)
         if invocation.has_connection():
             self._send(invocation, invocation.connection, ignore_heartbeat)
         elif invocation.has_partition_id():

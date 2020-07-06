@@ -34,8 +34,9 @@ class Proxy(object):
         self.logger = logging.getLogger("HazelcastClient.%s(%s)" % (type(self).__name__, name))
         self._to_object = client.serialization_service.to_object
         self._to_data = client.serialization_service.to_data
-        self._start_listening = client.listener.start_listening
-        self._stop_listening = client.listener.stop_listening
+        self._register_listener = client.listener.register_listener
+        self._deregister_listener = client.listener.deregister_listener
+        self._is_smart = client.listener.is_smart
 
     def destroy(self):
         """
@@ -112,7 +113,8 @@ class TransactionalProxy(object):
 
 
 ItemEventType = enum(added=1, removed=2)
-EntryEventType = enum(added=1, removed=2, updated=4, evicted=8, evict_all=16, clear_all=32, merged=64, expired=128, invalidation=256)
+EntryEventType = enum(added=1, removed=2, updated=4, evicted=8, evict_all=16, clear_all=32, merged=64, expired=128,
+                      invalidation=256, loaded=512)
 
 
 class ItemEvent(object):

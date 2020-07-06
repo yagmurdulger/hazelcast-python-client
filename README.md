@@ -12,7 +12,7 @@
     * [1.4.1. Configuring Hazelcast IMDG](#141-configuring-hazelcast-imdg)
     * [1.4.2. Configuring Hazelcast Python Client](#142-configuring-hazelcast-python-client)
       * [1.4.2.1. Group Settings](#1421-group-settings)
-      * [1.4.2.2. Network Settings](#1421-network-settings)
+      * [1.4.2.2. Network Settings](#1422-network-settings)
     * [1.4.3. Client System Properties](#143-client-system-properties)
   * [1.5. Basic Usage](#15-basic-usage)
   * [1.6. Code Samples](#16-code-samples)
@@ -23,6 +23,7 @@
 * [4. Serialization](#4-serialization)
   * [4.1. IdentifiedDataSerializable Serialization](#41-identifieddataserializable-serialization)
   * [4.2. Portable Serialization](#42-portable-serialization)
+    * [4.2.1. Versioning for Portable Serialization](#421-versioning-for-portable-serialization)
   * [4.3. Custom Serialization](#43-custom-serialization)
   * [4.4. JSON Serialization](#44-json-serialization)
   * [4.5. Global Serialization](#45-global-serialization)
@@ -66,7 +67,8 @@
   * [7.5. Distributed Events](#75-distributed-events)
     * [7.5.1. Cluster Events](#751-cluster-events)
       * [7.5.1.1. Listening for Member Events](#7511-listening-for-member-events)
-      * [7.5.1.2. Listening for Lifecycle Events](#7512-listening-for-lifecycle-events)
+      * [7.5.1.2. Listenring for Distributed Object Events](#7512-listening-for-distributed-object-events)
+      * [7.5.1.3. Listening for Lifecycle Events](#7513-listening-for-lifecycle-events)
     * [7.5.2. Distributed Data Structure Events](#752-distributed-data-structure-events)
       * [7.5.2.1. Listening for Map Events](#7521-listening-for-map-events)
   * [7.6. Distributed Computing](#76-distributed-computing)
@@ -766,7 +768,7 @@ As an alternative to the existing serialization methods, Hazelcast offers portab
 
 In order to support these features, a serialized `Portable` object contains meta information like the version and concrete location of the each field in the binary data. This way Hazelcast is able to navigate in the binary data and deserialize only the required field without actually deserializing the whole object which improves the query performance.
 
-With multiversion support, you can have two members where each of them having different versions of the same object, and Hazelcast will store both meta information and use the correct one to serialize and deserialize portable objects depending on the member. This is very helpful when you are doing a rolling upgrade without shutting down the cluster.
+With multiversion support, you can have two members each having different versions of the same object; Hazelcast stores both meta information and uses the correct one to serialize and deserialize portable objects depending on the member. This is very helpful when you are doing a rolling upgrade without shutting down the cluster.
 
 Also note that portable serialization is totally language independent and is used as the binary protocol between Hazelcast server and clients.
 
@@ -776,14 +778,18 @@ A sample portable implementation of a `Foo` class looks like the following:
 from hazelcast.serialization.api import Portable
 
 class Foo(Portable):
+
+    CLASS_ID = 1
+    FACTORY_ID = 1
+    
     def __init__(self, foo=None):
         self.foo = foo
         
     def get_class_id(self):
-        return 1
+        return CLASS_ID
         
     def get_factory_id(self):
-        return 1
+        return FACTORY_ID
         
     def write_portable(self, writer):
         writer.write_utf("foo", self.foo)
@@ -792,7 +798,7 @@ class Foo(Portable):
         self.foo = reader.read_utf("foo")
 ```
 
-> Note: For Portable to work in Python client, the class that inherits it should have default valued parameters in its `__init__` method so that an instance of that class can be created without passing any arguments to it.  
+> **NOTE: For Portable to work in Python client, the class that inherits it should have default valued parameters in its `__init__` method so that an instance of that class can be created without passing any arguments to it.**
 
 Similar to `IdentifiedDataSerializable`, a `Portable` class must provide the `get_class_id()` and `get_factory_id()` methods. The factory dictionary will be used to create the `Portable` object given the class ID.
 
@@ -811,6 +817,81 @@ config.serialization_config.data_serializable_factories[1] = factory
 ```
 
 Note that the ID that is passed to the `SerializationConfig` is same as the factory ID that `Foo` class returns.
+
+### 4.2.1. Versioning for Portable Serialization
+
+More than one version of the same class may need to be serialized and deserialized. For example, a client may have an older version of a class and the member to which it is connected may have a newer version of the same class.
+
+Portable serialization supports versioning. It is a global versioning, meaning that all portable classes that are serialized through a member get the globally configured portable version.
+
+You can declare the version in the `hazelcast.xml` configuration file using the `portable-version` element, as shown below.
+
+```xml
+<hazelcast>
+    ...
+    <serialization>
+        <portable-version>1</portable-version>
+    </serialization>
+    ...
+</hazelcast>
+```
+
+If you update the class by changing the type of one of the fields or by adding a new field, it is a good idea to upgrade the version of the class, rather than sticking to the global version specified in the `hazelcast.xml` file.
+In the Python client, you can achieve this by simply adding the `get_class_version()` method to your class’s implementation of `Portable`, and setting the `CLASS_VERSION` to be different than the default global version.
+
+> **NOTE: If you do not use the `get_class_version()` method in your `Portable` implementation, it will have the global version, by default.**
+
+Here is an example implementation of creating a version 2 for the above Foo class:
+
+```python
+from hazelcast.serialization.api import Portable
+
+class Foo(Portable):
+
+    CLASS_ID = 1
+    FACTORY_ID = 1
+    CLASS_VERSION = 2
+    
+    def __init__(self, foo=None, foo2=None):
+        self.foo = foo  
+        self.foo2 = foo2
+        
+    def get_class_id(self):
+        return CLASS_ID
+        
+    def get_factory_id(self):
+        return FACTORY_ID
+        
+    def get_class_version(self):
+        return CLASS_VERSION
+        
+    def write_portable(self, writer):
+        writer.write_utf("foo", self.foo)
+        writer.write_utf("foo2", self.foo2)
+        
+    def read_portable(self, reader):
+        self.foo = reader.read_utf("foo")
+        self.foo2 = reader.read_utf("foo2")
+```
+
+You should consider the following when you perform versioning:
+
+* It is important to change the version whenever an update is performed in the serialized fields of a class, for example by incrementing the version.
+* If a client performs a Portable deserialization on a field and then that Portable is updated by removing that field on the cluster side, this may lead to problems such as an AttributeError being raised when an older version of the client tries to access the removed field. 
+* Portable serialization does not use reflection and hence, fields in the class and in the serialized content are not automatically mapped. Field renaming is a simpler process. Also, since the class ID is stored, renaming the Portable does not lead to problems.
+* Types of fields need to be updated carefully. Hazelcast performs basic type upgradings, such as `int` to `float`.
+
+#### Example Portable Versioning Scenarios:
+
+Assume that a new client joins to the cluster with a class that has been modified and class's version has been upgraded due to this modification.
+
+If you modified the class by adding a new field, the new client’s put operations include that new field. If this new client tries to get an object that was put from the older clients, it gets null for the newly added field.
+
+If you modified the class by removing a field, the old clients get null for the objects that are put by the new client.
+
+If you modified the class by changing the type of a field to an incompatible type (such as from `int` to `String`), a `TypeError` (wrapped as `HazelcastSerializationError`) is generated as the client tries accessing an object with the older version of the class. The same applies if a client with the old version tries to access a new version object.
+
+If you did not modify a class at all, it works as usual.
 
 ## 4.3. Custom Serialization
 
@@ -1657,7 +1738,42 @@ The following is a membership listener registration by using the `add_listener()
 client.cluster.add_listener(member_added=lambda m: print("Member Added: The address is {}".format(m.address)))
 ```
 
-#### 7.5.1.2. Listening for Lifecycle Events
+#### 7.5.1.2. Listening for Distributed Object Events
+
+The events for distributed objects are invoked when they are created and destroyed in the cluster. When an event
+is received, listener function will be called. The parameter passed into the listener function will be of the type
+``DistributedObjectEvent``. A ``DistributedObjectEvent`` contains the following fields:
+* ``name``: Name of the distributed object.
+* ``service_name``: Service name of the distributed object.
+* ``event_type``: Type of the invoked event. It is either ``CREATED`` or ``DESTROYED``.
+
+The following is example of adding a distributed object listener to a client.
+
+```python
+def distributed_object_listener(event):
+    print("Distributed object event >>>", event.name, event.service_name, event.event_type)
+
+client.add_distributed_object_listener(listener_func=distributed_object_listener)
+
+map_name = "test_map"
+
+# This call causes a CREATED event
+test_map = client.get_map(map_name)
+
+# This causes no event because map was already created
+test_map2 = client.get_map(map_name)
+
+# This causes a DESTROYED event
+test_map.destroy()
+```
+
+**Output**
+```
+Distributed object event >>> test_map hz:impl:mapService CREATED
+Distributed object event >>> test_map hz:impl:mapService DESTROYED
+```
+
+#### 7.5.1.3. Listening for Lifecycle Events
 
 The `Lifecycle Listener` notifies for the following events:
 
@@ -2474,6 +2590,6 @@ Besides your development contributions as explained in the [Development and Test
 
 # 12. Copyright
 
-Copyright (c) 2008-2019, Hazelcast, Inc. All Rights Reserved.
+Copyright (c) 2008-2020, Hazelcast, Inc. All Rights Reserved.
 
 Visit [www.hazelcast.com](http://www.hazelcast.com) for more information.
